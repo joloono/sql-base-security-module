@@ -1,0 +1,63 @@
+# --- Secrets ---
+# Niemals .env-Files committen
+.env
+.env.local
+.env.*.local
+*.pem
+*.key
+
+# --- Node / TypeScript (falls jemand das Modul lokal testet) ---
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.npm/
+.pnp.*
+.yarn/
+
+# --- SQLite (das Modul nutzt better-sqlite3; lokale Test-DBs nicht committen) ---
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite3
+data/
+
+# --- Logs ---
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# --- Editor / IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.project
+.classpath
+.settings/
+
+# --- OS-Müll ---
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# --- Coverage / Test-Output ---
+coverage/
+*.lcov
+.nyc_output/
+
+# --- Temporary ---
+tmp/
+temp/
+*.tmp
+*.bak
