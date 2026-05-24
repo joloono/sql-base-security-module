@@ -1,51 +1,55 @@
-# Sicherheitsmodul
+# Security Module
 
-Wiederverwendbares Express + SQL Security-Hardening-Layer.
-Ursprünglich extrahiert aus dem RSVP-Tracker, projekt-unabhängig
-und ready zum Droppen in beliebige Node.js/Express-Projekte mit SQL-DB.
+Reusable Express + SQL security hardening layer.
 
-## Inhalt dieses Ordners
+This module was originally extracted from an RSVP tracker, but it is now
+project-agnostic and ready to copy into any Node.js/Express project with a SQL
+database.
 
+## Folder Contents
+
+```text
+security-module/
+|-- README.md                # this overview
+|-- Security-SQL.md          # detailed documentation: what, why, and how
+|-- INSTALL.md               # step-by-step integration guide
+|-- AUDIT.md                 # repository audit and internationalization notes
+|-- package-requirements.txt # npm dependencies required by the module
+`-- security/                # the reusable module to copy into projects
+    |-- index.ts             # entry point and createSecurityLayer factory
+    |-- store.ts             # SecurityStore interface, SQLite and memory stores
+    |-- rateLimit.ts         # sliding-window volume cap
+    |-- abuseGuard.ts        # escalating lockout for invalid input
+    |-- basicAuth.ts         # constant-time HTTP Basic Auth
+    |-- securityHeaders.ts   # CSP and security headers
+    |-- validate.ts          # Zod validation and payload-size helper
+    |-- ipUtils.ts           # trust-proxy-aware IP handling and peppered SHA-256
+    `-- README.md            # in-module quick reference
 ```
-Sicherheitsmodul/
-├── README.md                ← dieses File: Übersicht
-├── Security-SQL.md          ← ausführliche Doku (was, warum, wie)
-├── INSTALL.md               ← Schritt-für-Schritt-Anleitung zum Einbau
-├── package-requirements.txt ← npm-Dependencies, die das Modul braucht
-└── security/                ← DAS MODUL — diesen Ordner kopierst du
-    ├── index.ts             ← Einstiegspunkt + createSecurityLayer-Factory
-    ├── store.ts             ← SecurityStore-Interface, SQLite- & Memory-Impls
-    ├── rateLimit.ts         ← Sliding-Window Volumen-Cap
-    ├── abuseGuard.ts        ← Eskalierender Lockout bei ungültiger Eingabe
-    ├── basicAuth.ts         ← Constant-time HTTP Basic Auth
-    ├── securityHeaders.ts   ← CSP + sichere Header
-    ├── validate.ts          ← Zod + Größenlimit-Helper
-    ├── ipUtils.ts           ← Trust-Proxy-IP + gepfefferter SHA-256
-    └── README.md            ← In-Modul Quick-Reference
-```
 
-## Schnellstart
+## Quick Start
 
-1. `security/`-Ordner ins neue Projekt kopieren → `server/security/`
-2. `npm install zod better-sqlite3` + `npm install -D @types/better-sqlite3`
-3. `.env` anlegen mit `IP_HASH_PEPPER`, `ADMIN_USER`, `ADMIN_PASS`
-4. `createSecurityLayer({...})` aufrufen und Middleware in Express einhängen
-5. Smoke-Test laufen lassen
+1. Copy the `security/` folder into the target project, for example
+   `server/security/`.
+2. Install dependencies:
+   `npm install zod better-sqlite3` and
+   `npm install -D @types/better-sqlite3`.
+3. Create a `.env` file with `IP_HASH_PEPPER`, `ADMIN_USER`, and `ADMIN_PASS`.
+4. Call `createSecurityLayer({...})` and mount the middleware in Express.
+5. Run the smoke tests from [INSTALL.md](INSTALL.md).
 
-Vollständige Anleitung: siehe **INSTALL.md**.
+## What It Provides
 
-## Was es leistet
+- Per-IP, per-route rate limiting with a sliding window and generous defaults.
+- Escalating lockout for repeated invalid input.
+- Constant-time Basic Auth for admin endpoints.
+- Secure HTTP headers: CSP, frameguard, nosniff, and related policies.
+- Zod validation with a 64 KB payload cap.
+- Peppered IP hashing for privacy by design.
+- Pluggable counter storage: SQLite by default, Redis/Postgres possible.
 
-- Rate-Limit pro IP pro Route (Sliding Window, großzügige Defaults)
-- Lockout bei wiederholt ungültiger Eingabe (eskalierend, selbstheilend)
-- Constant-time Basic Auth für Admin-Endpoints
-- Sichere HTTP-Header (CSP, frameguard, nosniff, ...)
-- Zod-Validierung + 64 KB Payload-Cap
-- Gepfeffertes IP-Hashing (Privacy-by-design)
-- Austauschbarer Counter-Store (SQLite default, Redis/Postgres möglich)
+Design principle: **secure without blocking legitimate users**. Strikes are
+earned only by bad traffic, never by a valid first submission.
 
-Designprinzip: **sicher, ohne der Usability im Weg zu stehen** —
-Strikes werden ausschließlich durch *schlechten* Traffic verdient,
-nie durch valide Erstabsender.
-
-Vollständige Begründung jeder Best Practice: siehe **Security-SQL.md**.
+For the full reasoning behind each security practice, see
+[Security-SQL.md](Security-SQL.md).

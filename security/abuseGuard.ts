@@ -24,7 +24,7 @@ export interface AbuseGuard {
   middleware: (req: Request, res: Response, next: NextFunction) => void;
   /** Call when a request from this IP turned out to be invalid/abusive. */
   recordInvalid: (req: Request) => void;
-  /** Call after a fully valid request — clears that IP's strike record. */
+  /** Call after a fully valid request - clears that IP's strike record. */
   recordValid: (req: Request) => void;
 }
 
@@ -34,8 +34,8 @@ export interface AbuseGuard {
  * Key design choice for "secure without hurting usability": a normal user who
  * submits a valid form is never counted here at all. Strikes are only added by
  * recordInvalid() (failed validation, garbage payloads, auth brute force).
- * After `threshold` strikes the IP gets a short, escalating timeout — minutes,
- * not hours — and any valid submission wipes the slate clean.
+ * After `threshold` strikes the IP gets a short, escalating timeout - minutes,
+ * not hours - and any valid submission wipes the slate clean.
  */
 export function createAbuseGuard(opts: AbuseGuardOptions): AbuseGuard {
   const threshold = opts.threshold ?? 5;
@@ -65,7 +65,7 @@ export function createAbuseGuard(opts: AbuseGuardOptions): AbuseGuard {
           return res.status(429).json({
             error:
               opts.message ??
-              "Zu viele ungültige Versuche. Bitte kurz warten und erneut versuchen.",
+              "Too many invalid attempts. Please wait briefly and try again.",
           });
         }
       }

@@ -1,8 +1,8 @@
-# `security/` — reusable SQL-app hardening layer
+# `security/` - reusable SQL-app hardening layer
 
 A self-contained, project-agnostic Express security layer. Copy the whole
 `security/` folder into any Express + SQL project. No project-specific code
-lives here. No external dependencies beyond Node core + Express types — the
+lives here. No external dependencies beyond Node core + Express types - the
 SQLite store only needs a `better-sqlite3`-compatible handle, passed in.
 
 **Design principle:** secure without hurting usability. Volume limits are
@@ -66,7 +66,7 @@ app.get("/api/admin/x", security.requireAdmin!, handler);
 
 ## Swapping the backing store
 
-The middleware never touches a DB directly — it talks to the `SecurityStore`
+The middleware never touches a DB directly - it talks to the `SecurityStore`
 interface (`hit` / `count` / `reset` / `prune`). Ship with
 `SqliteSecurityStore` today; later implement the same 4 methods against
 Postgres or Redis and pass that instead. Nothing else changes.
@@ -82,6 +82,6 @@ Postgres or Redis and pass that instead. Nothing else changes.
 
 - `SqliteSecurityStore` is single-process (matches SQLite). Behind a load
   balancer, implement `SecurityStore` against Redis instead.
-- HSTS is off by default — only enable on all-HTTPS deployments (it's sticky).
+- HSTS is off by default - only enable on all-HTTPS deployments (it's sticky).
 - The default CSP allows `'unsafe-inline'` styles for SPA toolchains. Tighten
   via the `csp` option if your build supports nonces/hashes.

@@ -1,249 +1,338 @@
-# `security/` — Modul-Dokumentation
+# `security/` - Module Documentation
 
-Ein drop-in, projekt-unabhängiges Express + SQL Security-Layer.
-Null projekt-spezifischer Code im Ordner; ein einziger `createSecurityLayer()`-Aufruf verdrahtet alles.
-Designprinzip: **"sicher, ohne der Usability im Weg zu stehen"** — Limits bestrafen *schlechten* Traffic, niemals ehrliche Erstabsender.
+A drop-in, project-agnostic Express + SQL security layer.
+
+The `security/` folder contains no project-specific code. One
+`createSecurityLayer()` call wires everything together.
+
+Design principle: **secure without blocking legitimate users**. Limits penalize
+bad traffic, never honest first submissions.
 
 ---
 
-## 1. Was es tut (Überblick)
+## 1. What It Does
 
-| Anliegen | Komponente | Default-Verhalten |
+| Concern | Component | Default behavior |
 |---|---|---|
-| Zu viele Requests von einer IP | `rateLimit` | 10 Requests / 10 min pro IP pro Route → 429 |
-| Wiederholte ungültige/missbräuchliche Payloads | `abuseGuard` | 5 Strikes / 15 min → eskalierender Cooldown (1m → 5m → 15m) |
-| Brute-Force auf Admin-Login | `basicAuth` | Constant-time-Vergleich, lehnt schwache Creds in Production ab |
-| XSS / Clickjacking / MIME-Sniffing | `securityHeaders` | CSP, frameguard, nosniff, referrer policy, permissions policy |
-| Müll-/Überdimensionierte Payloads | `validateBody` | Zod-Schema + 64 KB Byte-Cap |
-| IP-Korrelation / Privacy | `hashIp` | Gepfefferter SHA-256-Hash (nicht via Rainbow-Table reversibel) |
-| Zähler-Persistenz | `SecurityStore` | Austauschbar: SQLite heute, Postgres/Redis morgen — gleiches Interface |
+| Too many requests from one IP | `rateLimit` | 10 requests / 10 min per IP per route, then HTTP 429 |
+| Repeated invalid or abusive payloads | `abuseGuard` | 5 strikes / 15 min, then escalating cooldowns: 1m, 5m, 15m |
+| Brute force against admin login | `basicAuth` | Constant-time comparison and weak-credential rejection in production |
+| XSS, clickjacking, MIME sniffing | `securityHeaders` | CSP, frameguard, nosniff, referrer policy, permissions policy |
+| Invalid or oversized payloads | `validateBody` | Zod schema validation plus a 64 KB byte cap |
+| IP correlation and privacy | `hashIp` | Peppered SHA-256 hash, not reversible through rainbow tables |
+| Counter persistence | `SecurityStore` | Pluggable interface: SQLite today, Postgres/Redis later |
 
 ---
 
-## 2. Architektur
+## 2. Architecture
 
+```text
+Request
+  |
+  v
++--------------------------------+
+| securityHeaders, app-wide      |
++---------------+----------------+
+                |
+                v
++---------------------------------------------+
+| Write routes                                 |
+| - rateLimit: volume cap                      |
+| - abuseGuard.middleware: current lockout     |
++---------------+-----------------------------+
+                |
+                v
++---------------------------------------------+
+| validateBody(req.body, schema)               |
+| - invalid: recordInvalid, add a strike       |
+| - valid: recordValid, clear strikes          |
++---------------+-----------------------------+
+                |
+                v
+Business logic
+
+Counters for rateLimit and abuseGuard live in a SecurityStore:
+
++----------------------+--------------------------------------------+
+| SqliteSecurityStore  | shares the app DB, table security_events   |
+| MemorySecurityStore  | test/dev fallback                         |
+| Custom store         | Postgres, Redis, or another backend       |
++----------------------+--------------------------------------------+
 ```
-                 ┌──────────────────────────────┐
-   Request ──►   │  securityHeaders (app-weit)  │
-                 └──────────────┬───────────────┘
-                                ▼
-            ┌──────────────────────────────────────────┐
-   auf      │  rateLimit          ← Volumen-Cap        │
-   Write-   │  abuseGuard.middleware  ← Sperre, falls   │
-   Routen:  │                            aktuell        │
-            │                            blockiert       │
-            └──────────────┬───────────────────────────┘
-                           ▼
-            ┌──────────────────────────────────────────┐
-            │  validateBody(req.body, schema)          │
-            │    invalid? → recordInvalid (Strike)     │
-            │    valid?   → recordValid   (Strikes weg)│
-            └──────────────┬───────────────────────────┘
-                           ▼
-                       Business-Logik
 
-   Zähler für rateLimit + abuseGuard leben in einem SecurityStore:
-   ┌──────────────────────┐
-   │ SqliteSecurityStore  │  teilt sich die App-DB, Tabelle `security_events`
-   │ MemorySecurityStore  │  Test/Dev-Fallback
-   │ <deine Impl>         │  Postgres / Redis / etc.
-   └──────────────────────┘
-```
-
-Sämtliche Middleware ist synchron und frei von `await` — keine Race-Conditions auf den Zählern.
+All middleware is synchronous and free of `await`, so counter checks and
+increments do not introduce asynchronous race conditions.
 
 ---
 
-## 3. Komponenten im Detail
+## 3. Components
 
-### 3.1 `rateLimit` — Sliding-Window Volumen-Cap
+### 3.1 `rateLimit` - Sliding-Window Volume Cap
 
-**Was:** Begrenzt, wie viele Requests eine einzelne IP an eine bestimmte Route innerhalb eines Zeitfensters senden darf. Liefert HTTP 429 + `Retry-After` bei Überschreitung.
+**What it does:** Limits how many requests one IP can send to one route during
+a time window. It returns HTTP 429 and `Retry-After` when the limit is exceeded.
 
-**Best Practices:**
-- **Sliding Window** (kein Fixed Bucket) — keine Traffic-Spikes an den Fenster-Grenzen.
-- **Schlüssel = (Route × gepfefferter IP-Hash)** — separate Buckets pro Endpoint; ein lauter Endpoint sperrt keinen anderen.
-- **Standard-Header** — sendet `RateLimit-Limit`, `RateLimit-Remaining`, `Retry-After`, damit Clients sich selbst drosseln können.
-- **Großzügige Defaults** (10 / 10 min) — so gewählt, dass eine echte Familie, die ein Formular ausfüllt und zweimal retries, *nie* dagegen läuft. Schärfere Limits sind opt-in pro Route.
+**Best practices:**
 
-**Optionen:** `windowMs` (10 min), `max` (10), `bucket` (method+path), `pepper`, `message`.
+- **Sliding window instead of fixed bucket:** avoids traffic spikes at window
+  boundaries.
+- **Key = route plus peppered IP hash:** each endpoint gets its own bucket, so
+  heavy traffic to one endpoint does not block another endpoint.
+- **Standard headers:** sends `RateLimit-Limit`, `RateLimit-Remaining`, and
+  `Retry-After` so clients can throttle themselves.
+- **Generous defaults:** 10 requests per 10 minutes is intended to avoid
+  blocking real users who retry a form a few times. Stricter limits are opt-in
+  per route.
 
-### 3.2 `abuseGuard` — Lockout bei ungültiger Eingabe
+**Options:** `windowMs` (10 min), `max` (10), `bucket` (method + path),
+`pepper`, `message`.
 
-**Was:** Trackt **ausschließlich fehlgeschlagene/ungültige Versuche** pro IP und verhängt einen eskalierenden Cooldown, sobald eine Schwelle überschritten ist.
+### 3.2 `abuseGuard` - Lockout for Invalid Input
 
-**Best Practices:**
-- **Bestraft schlechte Signale, nicht Volumen** — Strikes werden ausschließlich von `recordInvalid()` hinzugefügt (gescheitertes Zod-Parsen, Müll-Body, Auth-Brute-Force), niemals durch valide Requests. Das ist das zentrale Usability-Prinzip.
-- **Selbstheilend** — `recordValid()` löscht den Strike-Record. Ein User, der seinen Fehler korrigiert, hat sofort wieder eine weiße Weste.
-- **Progressiver Lockout** — 1 min → 5 min → 15 min. Lang genug, um Skript-Abuse abzuwehren; kurz genug, dass ein verwirrter ehrlicher User es aussitzen kann.
-- **Per-Route-Bucketing** — wie bei `rateLimit`: Fehler an einem Endpoint sperren keinen anderen.
-- **Gleicher constant-time-Datenpfad** wie `rateLimit` — nutzt denselben `SecurityStore`.
+**What it does:** Tracks only failed or invalid attempts per IP and applies an
+escalating cooldown after the strike threshold is exceeded.
 
-**Optionen:** `threshold` (5), `windowMs` (15 min), `lockoutSteps` (`[1m, 5m, 15m]`), `bucket`, `pepper`, `message`.
+**Best practices:**
 
-### 3.3 `basicAuth` — Credential-Prüfung
+- **Penalizes bad signals, not volume:** strikes are added only by
+  `recordInvalid()` after failed Zod parsing, garbage payloads, auth brute
+  force, or similar invalid input. Valid requests never add strikes.
+- **Self-healing:** `recordValid()` clears the strike record. A user who fixes
+  an input error can continue immediately.
+- **Progressive lockout:** 1 min, then 5 min, then 15 min. This is long enough
+  to slow scripts but short enough for a confused legitimate user to wait out.
+- **Per-route bucketing:** invalid input on one endpoint does not block another
+  endpoint.
+- **Same counter path as `rateLimit`:** both use the same `SecurityStore`
+  abstraction.
 
-**Was:** HTTP Basic Auth für Admin-Endpoints.
+**Options:** `threshold` (5), `windowMs` (15 min), `lockoutSteps`
+(`[1m, 5m, 15m]`), `bucket`, `pepper`, `message`.
 
-**Best Practices:**
-- **Constant-time-Vergleich** (`crypto.timingSafeEqual`) — schließt den Timing-Leak-Angriffsvektor, den naives `===` öffnet.
-- **Length-aware** — auch bei unterschiedlichen Längen wird ein Vergleich gleicher Form ausgeführt, damit Timing keine Passwortlänge leakt.
-- **Production-Guardrail** — wirft beim Startup, wenn Creds leer oder `admin`/`admin` sind und `NODE_ENV=production`. Laut scheitern statt still ausliefern.
-- **Gleiche Vergleichsform bei falschem User vs. falschem Passwort** — sowohl `okUser` als auch `okPass` werden ausgewertet, selbst wenn der erste schon fehlschlägt. So kann ein Angreifer "User existiert" nicht von "falsches Passwort" unterscheiden.
-- **Standard 401 + `WWW-Authenticate`**, damit Browser korrekt prompten.
+### 3.3 `basicAuth` - Credential Checks
 
-**Optionen:** `username`, `password`, `realm` (`Admin`), `enforceStrongInProduction` (true).
+**What it does:** Provides HTTP Basic Auth middleware for admin endpoints.
 
-### 3.4 `securityHeaders` — Defense-in-Depth Header
+**Best practices:**
 
-**Was:** Setzt app-weit ein kuratiertes Set an HTTP-Sicherheits-Headern.
+- **Constant-time comparison:** uses `crypto.timingSafeEqual` to reduce timing
+  attack exposure compared with naive `===` checks.
+- **Length-aware checks:** credentials with different lengths still go through
+  a comparison path before failing.
+- **Production guardrail:** throws during startup if credentials are empty or
+  `admin`/`admin` while `NODE_ENV=production`.
+- **Same evaluation shape for wrong user and wrong password:** both `okUser`
+  and `okPass` are evaluated before the middleware decides whether to reject.
+- **Standard 401 with `WWW-Authenticate`:** browsers and HTTP clients know how
+  to prompt correctly.
 
-**Best Practices:**
-- **Content-Security-Policy** (Default, SPA-tauglich): `default-src 'self'`, blockiert Third-Party-Scripts/Iframes, `object-src 'none'`, `frame-ancestors 'none'`, `base-uri 'self'`. Über die Option `csp` schärfer setzbar, wenn dein Build Nonces unterstützt.
-- **X-Frame-Options: DENY** + `frame-ancestors 'none'` in der CSP — Clickjacking auf zwei Ebenen blockiert.
-- **X-Content-Type-Options: nosniff** — killt MIME-Sniffing-Angriffe.
-- **Referrer-Policy: strict-origin-when-cross-origin** — leakt nie volle URLs cross-origin.
-- **Permissions-Policy** — verbietet Geolocation/Mikrofon/Kamera explizit per Default.
-- **X-XSS-Protection: 0** — deaktiviert den legacy IE/old-Chrome-Filter (hat Schwachstellen verursacht); wir verlassen uns auf die CSP. Das ist die OWASP-Empfehlung.
-- **HSTS nur opt-in** — ist im Browser sticky, daher per Default nicht gesetzt für HTTP-fähige Deployments.
+**Options:** `username`, `password`, `realm` (`Admin`),
+`enforceStrongInProduction` (true).
 
-### 3.5 `validateBody` — Schema + Größenprüfung
+### 3.4 `securityHeaders` - Defense-in-Depth Headers
 
-**Was:** Führt ein Zod-Schema auf einem Request-Body aus, mit hartem Byte-Cap. Gibt ein Result-Objekt zurück.
+**What it does:** Sets a curated app-wide set of HTTP security headers.
 
-**Best Practices:**
-- **Schema-getriebene Validierung überall** — dem Client nie trauen; alle Writes laufen durch Zod.
-- **Payload-Größenlimit** (64 KB Default) — schützt gegen Memory-Amplification, bevor das Schema überhaupt läuft.
-- **Keine Exceptions über Middleware-Grenzen** — gibt `{ ok, data, errors, rejected }` zurück, sodass der Caller die HTTP-Form kontrolliert und `recordInvalid()` füttern kann.
-- **`rejected` vs `!ok`** — unterscheidet "konnte nicht mal geparst werden" (vermutlich böswillig) von "valides JSON, aber Schema nicht eingehalten" (eher User-Fehler). Beides ist trotzdem ein Strike.
+**Best practices:**
 
-### 3.6 `ipUtils` — IP-Auflösung und Hashing
+- **Content-Security-Policy:** the default is SPA-compatible:
+  `default-src 'self'`, same-origin scripts, no objects, no framed ancestors,
+  and `base-uri 'self'`. Pass the `csp` option to tighten it for builds that
+  support nonces or hashes.
+- **X-Frame-Options plus CSP frame-ancestors:** clickjacking is blocked on two
+  layers.
+- **X-Content-Type-Options: nosniff:** blocks MIME-sniffing attacks.
+- **Referrer-Policy: strict-origin-when-cross-origin:** avoids leaking full
+  URLs to cross-origin destinations.
+- **Permissions-Policy:** disables geolocation, microphone, and camera by
+  default.
+- **X-XSS-Protection: 0:** disables the legacy IE/old-Chrome filter, which has
+  caused vulnerabilities. CSP is the modern protection.
+- **HSTS is opt-in:** it is sticky in browsers, so it is not enabled by default
+  for deployments that may still serve HTTP.
 
-**Was:** Löst die echte Client-IP auf und hasht sie für die Speicherung.
+### 3.5 `validateBody` - Schema and Size Checks
 
-**Best Practices:**
-- **Trust-Proxy-bewusst** — nutzt `req.ip` (Express respektiert `trust proxy`) mit Socket-Adress-Fallback. Verhindert IP-Header-Spoofing, wenn kein vertrauter Proxy existiert.
-- **Gepfeffertes Hashing** — `SHA-256("<server-secret>:<ip>")`. Ohne Pepper ist IP-Hashing Theater — der IPv4-Raum ist klein genug, um in Sekunden rainbow-getablet zu werden. Der Pepper macht den gespeicherten Hash über Deployments hinweg nicht korrelierbar.
-- **Pepper via Env** (`IP_HASH_PEPPER`) mit einem als unsicher markierten Dev-Default.
+**What it does:** Runs a Zod schema against a request body and enforces a hard
+byte cap. It returns a result object.
 
-### 3.7 `SecurityStore` — Austauschbare Zähler-Persistenz
+**Best practices:**
 
-**Was:** Das einzige, was die Middleware über Storage weiß. Vier Methoden: `hit`, `count`, `reset`, `prune`.
+- **Schema-driven validation everywhere:** never trust client input; write
+  endpoints should pass through Zod.
+- **Payload size limit:** the 64 KB default helps protect against memory
+  amplification before schema validation runs.
+- **No exceptions across middleware boundaries:** returns
+  `{ ok, data, errors, rejected }`, so the caller controls the HTTP response
+  shape and can call `recordInvalid()`.
+- **`rejected` versus `!ok`:** separates "could not even be parsed or accepted"
+  from "valid JSON that failed the schema". Both can still be treated as
+  strikes.
 
-**Best Practices:**
-- **Persistenz per Default** (`SqliteSecurityStore`) — Zähler überleben Prozess-Restarts, ein Neustart ist also kein Free-Abuse-Window.
-- **Indexierte Queries** — `(key, ts)`-Index auf `security_events`, damit `count` O(log n) ist.
-- **Throttled Pruning** — `prune()` läuft höchstens einmal pro Minute, egal wie hoch die Request-Rate ist; kein Overhead pro Request.
-- **Auto-Bootstrap** — legt seine Tabelle und den Index beim ersten Gebrauch an; kein separater Migrationsschritt.
-- **Interface, keine Klasse** — `SqliteSecurityStore` lässt sich gegen eine Redis-Implementierung hinter einem Load-Balancer tauschen, ohne dass die Middleware angefasst wird.
+### 3.6 `ipUtils` - IP Resolution and Hashing
+
+**What it does:** Resolves the real client IP and hashes it before storage.
+
+**Best practices:**
+
+- **Trust-proxy aware:** uses `req.ip`, which respects Express `trust proxy`,
+  and falls back to the socket address. This avoids trusting spoofable headers
+  when no proxy is configured.
+- **Peppered hashing:** stores `SHA-256("<server-secret>:<ip>")`. The IPv4
+  space is small enough for unpeppered hashes to be brute-forced quickly, so
+  the pepper is what makes stored hashes non-reversible in practice.
+- **Environment configuration:** use `IP_HASH_PEPPER`. A marked dev default
+  exists so local development still runs, but production should always provide
+  a secret value.
+
+### 3.7 `SecurityStore` - Pluggable Counter Persistence
+
+**What it does:** Defines the only storage contract the middleware knows about.
+It has four methods: `hit`, `count`, `reset`, and `prune`.
+
+**Best practices:**
+
+- **Persistent by default:** `SqliteSecurityStore` keeps counters across
+  process restarts, so restarting the app does not create a free abuse window.
+- **Indexed queries:** `(key, ts)` index on `security_events` keeps `count`
+  efficient.
+- **Throttled pruning:** `prune()` runs at most once per minute regardless of
+  request rate.
+- **Auto-bootstrap:** creates its table and index on first use, so no separate
+  migration step is needed.
+- **Interface-based design:** replace SQLite with Redis or Postgres without
+  changing the middleware.
 
 ---
 
-## 4. Die "usable security"-Prinzipien, in Code gegossen
+## 4. Usable Security Principles
 
-Diese Design-Entscheidungen unterscheiden dieses Layer von einem Standard-`helmet + express-rate-limit`-Setup:
+These design choices distinguish this layer from a generic
+`helmet + express-rate-limit` setup:
 
-1. **Strikes werden verdient, nicht angenommen.** Volumen allein triggert nie einen Lockout; nur `recordInvalid()`. Ein echter User, der gültige Daten sendet, ist für den abuseGuard unsichtbar.
-2. **Validierung ist das Abuse-Signal.** Ein Zod-Fail ist das sauberste "das ist kein legitimer User"-Signal, das du bekommen kannst. Wir füttern es direkt ins Lockout-Tracking.
-3. **Goodwill bei Erfolg.** Ein gültiger Request nach mehreren Versuchen löscht den Strike-Record. Verwirrte User werden nicht bestraft, wenn sie es richtig machen.
-4. **Cooldowns in Minuten, nicht Stunden.** Lang genug, um Skript-Abuse zu brechen; kurz genug, dass ein verwirrter Mensch warten kann.
-5. **Per-Route-Bucketing.** Ein lauter Endpoint beeinflusst keine anderen.
-6. **Production-Guardrails scheitern laut.** Schwache Admin-Creds in Production = Startup-Crash, nicht stilles Ausliefern.
-7. **Header so gewählt, dass eine normale SPA noch funktioniert.** Kein `'unsafe-eval'`, aber `'unsafe-inline'` Styles erlaubt — über Option schärfbar, niemals per Default kaputt.
-8. **Kein `await` in der Security-Middleware.** Synchrones SQLite + synchrone Zähler = kein TOCTOU zwischen "check" und "increment".
-
----
-
-## 5. Abgedeckte (und nicht abgedeckte) Bedrohungen
-
-### Abgedeckt
-- Volumen-Abuse / Formular-Spam — `rateLimit`
-- Zielgerichteter Brute-Force auf Inputs oder Login — `abuseGuard` + `basicAuth` (timing-safe)
-- Müll-/Überdimensionierte Payloads — `validateBody`-Größenlimit + `express.json({ limit })`
-- Clickjacking — `X-Frame-Options` + `frame-ancestors`
-- MIME-Sniffing — `X-Content-Type-Options`
-- XSS durch injizierte Scripts — CSP (in den Grenzen von `'unsafe-inline'` Styles)
-- Referrer-Leaking — `Referrer-Policy`
-- IP-Rainbow-Tabling gespeicherter Hashes — gepfefferter Hash
-- Default-Creds-in-Production-Footgun — Startup-Verweigerung
-- Neustart-resettet-Zähler — persistenter `SecurityStore`
-
-### Nicht abgedeckt (per Design — out of scope)
-- **Bot-Detection / CAPTCHA** — andere Ebene; bei Bedarf mit hCaptcha/Turnstile kombinieren.
-- **DDoS auf Netzwerk-Ebene** — gehört zu CDN/WAF (Cloudflare, fly-proxy, etc.).
-- **Session-Management / CSRF** — Basic Auth braucht keinen CSRF-Schutz; CSRF-Middleware hinzufügen, falls cookie-basierte Sessions eingeführt werden.
-- **Datenbank-Ebene (SQL Injection)** — wird außerhalb des Moduls durch Drizzle/parameterisierte Queries abgehandelt.
-- **Verteilte Zähler über mehrere Nodes** — `SqliteSecurityStore` ist single-process. Hinter einem Load-Balancer eine Redis-Variante von `SecurityStore` implementieren.
+1. **Strikes are earned, not assumed.** Volume alone never triggers a lockout;
+   only `recordInvalid()` does. A real user who sends valid data is invisible
+   to `abuseGuard`.
+2. **Validation is the abuse signal.** A Zod failure is a clean signal that the
+   request was not acceptable. It feeds directly into lockout tracking.
+3. **Success restores goodwill.** A valid request clears the strike record.
+4. **Cooldowns are minutes, not hours.** They slow scripted abuse without
+   creating long accidental lockouts.
+5. **Buckets are per route.** A noisy endpoint does not affect other endpoints.
+6. **Production guardrails fail loudly.** Weak admin credentials in production
+   crash startup instead of silently shipping.
+7. **Headers are chosen so normal SPAs still work.** No `'unsafe-eval'`; inline
+   styles are allowed by default and can be tightened with options.
+8. **No `await` in security middleware.** Synchronous SQLite and synchronous
+   counters avoid time-of-check/time-of-use races between check and increment.
 
 ---
 
-## 6. Konfigurationsoberfläche
+## 5. Covered and Out-of-Scope Threats
+
+### Covered
+
+- Volume abuse and form spam through `rateLimit`.
+- Targeted brute force against inputs or login through `abuseGuard` and
+  timing-safe `basicAuth`.
+- Invalid or oversized payloads through `validateBody` and
+  `express.json({ limit })`.
+- Clickjacking through `X-Frame-Options` and `frame-ancestors`.
+- MIME sniffing through `X-Content-Type-Options`.
+- Script injection risk reduction through CSP, within the limits of allowing
+  inline styles.
+- Referrer leakage through `Referrer-Policy`.
+- Rainbow-table reversal of stored IP hashes through peppered hashing.
+- Default credentials in production through startup refusal.
+- Counter resets on restart through persistent `SecurityStore`.
+
+### Not Covered by Design
+
+- **Bot detection or CAPTCHA:** handle this at another layer with hCaptcha,
+  Turnstile, or equivalent if needed.
+- **Network-level DDoS:** belongs at CDN/WAF/proxy level.
+- **Session management or CSRF:** Basic Auth does not need CSRF protection, but
+  cookie-based sessions should add CSRF middleware.
+- **Database-level SQL injection:** handle this outside the module with
+  parameterized queries or an ORM/query builder.
+- **Distributed counters across multiple nodes:** `SqliteSecurityStore` is
+  single-process. Use a Redis-backed `SecurityStore` behind a load balancer.
+
+---
+
+## 6. Configuration Surface
 
 ```ts
 createSecurityLayer({
-  store,                       // SecurityStore (SQLite/Memory/eigene)
+  store,                       // SecurityStore: SQLite, memory, or custom
   pepper: process.env.IP_HASH_PEPPER,
 
   rateLimit:  { windowMs, max, bucket, message },
   abuseGuard: { threshold, windowMs, lockoutSteps, bucket, message },
   basicAuth:  { username, password, realm, enforceStrongInProduction },
   headers:    { csp, hsts },
-})
+});
 ```
 
-Jede Komponente ist auch einzeln importierbar, falls feinere Kontrolle nötig ist.
+Every component can also be imported individually when finer control is needed.
 
-### Umgebungsvariablen
+### Environment Variables
 
-| Var | Zweck | Pflicht? |
+| Variable | Purpose | Required? |
 |---|---|---|
-| `IP_HASH_PEPPER` | Geheimes Salt für IP-Hashing | **Ja in Production** |
-| `ADMIN_USER` / `ADMIN_PASS` | Basic-Auth-Credentials | **Ja in Production** (Startup verweigert schwache Creds) |
+| `IP_HASH_PEPPER` | Secret salt for IP hashing | **Yes in production** |
+| `ADMIN_USER` / `ADMIN_PASS` | Basic Auth credentials | **Yes in production** |
 
 ---
 
-## 7. Verdrahtungs-Muster (kanonisch)
+## 7. Canonical Wiring Pattern
 
 ```ts
-app.set("trust proxy", 1);          // echte Client-IPs hinter Proxy
-app.use(security.headers);          // app-weite Hardening-Header
-app.use(express.json({ limit: "64kb" })); // Body-Cap
+app.set("trust proxy", 1);          // real client IPs behind one proxy
+app.use(security.headers);          // app-wide hardening headers
+app.use(express.json({ limit: "64kb" })); // body cap
 
 app.post(
   "/api/thing",
-  security.rateLimit,               // Volumen-Cap
-  security.abuseGuard.middleware,   // Sperre, falls aktuell blockiert
+  security.rateLimit,               // volume cap
+  security.abuseGuard.middleware,   // blocks if currently locked out
   (req, res) => {
     const r = validateBody(req.body, mySchema);
     if (!r.ok) {
-      security.abuseGuard.recordInvalid(req); // Strike
+      security.abuseGuard.recordInvalid(req); // add strike
       return res.status(400).json({ error: r.errors });
     }
-    security.abuseGuard.recordValid(req);     // Strikes löschen
-    // ... r.data persistieren ...
+    security.abuseGuard.recordValid(req);     // clear strikes
+    // ... persist r.data ...
   },
 );
 
 app.get("/api/admin/x", security.requireAdmin!, handler);
 ```
 
-Diese Reihenfolge — **Volumen → Lockout → Validieren → Outcome aufzeichnen** — ist das Rückgrat des Moduls.
+This order is the backbone of the module:
+
+```text
+volume cap -> lockout check -> validate -> record outcome
+```
 
 ---
 
-## 8. Dateien
+## 8. Files
 
-```
+```text
 security/
-├── index.ts             ← Einstiegspunkt + createSecurityLayer-Factory
-├── store.ts             ← SecurityStore-Interface, SQLite- & Memory-Impls
-├── rateLimit.ts         ← Sliding-Window Volumen-Cap
-├── abuseGuard.ts        ← Eskalierender Lockout bei ungültiger Eingabe
-├── basicAuth.ts         ← Constant-time HTTP Basic Auth
-├── securityHeaders.ts   ← CSP + sichere Header
-├── validate.ts          ← Zod + Größenlimit-Helper
-├── ipUtils.ts           ← Trust-Proxy-IP + gepfefferter SHA-256
-└── README.md            ← Copy-Paste-Setup + Optionstabelle
+|-- index.ts             # entry point and createSecurityLayer factory
+|-- store.ts             # SecurityStore interface, SQLite and memory stores
+|-- rateLimit.ts         # sliding-window volume cap
+|-- abuseGuard.ts        # escalating lockout for invalid input
+|-- basicAuth.ts         # constant-time HTTP Basic Auth
+|-- securityHeaders.ts   # CSP and secure headers
+|-- validate.ts          # Zod validation and size cap helper
+|-- ipUtils.ts           # trust-proxy IP handling and peppered SHA-256
+`-- README.md            # copy-paste setup and options table
 ```
 
-Den kompletten Ordner in ein anderes Express + SQL-Projekt droppen, einen `SqliteSecurityStore(yourDb)` durchreichen, `createSecurityLayer(...)` aufrufen — und du hast denselben Schutz. Genau das ist der Sinn.
+Copy the complete `security/` folder into another Express + SQL project, pass a
+`SqliteSecurityStore(yourDb)` or another `SecurityStore` to
+`createSecurityLayer(...)`, and the same protections are available there.

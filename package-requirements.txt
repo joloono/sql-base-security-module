@@ -1,19 +1,19 @@
-# Dependencies, die das Sicherheitsmodul im Zielprojekt braucht
-# (Express + Express-Types werden vorausgesetzt — die hat dein Projekt eh schon)
+# Dependencies required by the security module in the target project
+# Express and Express types are expected to already exist in that project.
 
-# Pflicht
+# Required
 zod                     >= 3.22.0     # validateBody
-better-sqlite3          >= 11.0.0     # SqliteSecurityStore (nur falls SQLite genutzt)
+better-sqlite3          >= 11.0.0     # SqliteSecurityStore, only when SQLite is used
 
-# Dev / Types
-@types/better-sqlite3   >= 7.6.0      # TypeScript-Typen für better-sqlite3
-typescript              >= 5.0.0      # zum Bauen
+# Development / types
+@types/better-sqlite3   >= 7.6.0      # TypeScript types for better-sqlite3
+typescript              >= 5.0.0      # build support
 
-# Im Zielprojekt vermutlich bereits installiert
+# Probably already installed in the target project
 express                 >= 4.18.0
 @types/express          >= 4.17.0
 
-# In Node.js Core (nichts zu installieren)
+# Included in Node.js core; nothing to install
 # - crypto.timingSafeEqual
 # - crypto.createHash
 # - crypto.randomUUID

@@ -1,12 +1,12 @@
 # --- Secrets ---
-# Niemals .env-Files committen
+# Never commit .env files.
 .env
 .env.local
 .env.*.local
 *.pem
 *.key
 
-# --- Node / TypeScript (falls jemand das Modul lokal testet) ---
+# --- Node / TypeScript, if the module is tested locally ---
 node_modules/
 dist/
 build/
@@ -15,7 +15,7 @@ build/
 .pnp.*
 .yarn/
 
-# --- SQLite (das Modul nutzt better-sqlite3; lokale Test-DBs nicht committen) ---
+# --- SQLite; never commit local test databases ---
 *.db
 *.db-wal
 *.db-shm
@@ -41,7 +41,7 @@ lerna-debug.log*
 .classpath
 .settings/
 
-# --- OS-Müll ---
+# --- OS files ---
 .DS_Store
 .DS_Store?
 ._*
@@ -51,7 +51,7 @@ ehthumbs.db
 Thumbs.db
 desktop.ini
 
-# --- Coverage / Test-Output ---
+# --- Coverage / test output ---
 coverage/
 *.lcov
 .nyc_output/

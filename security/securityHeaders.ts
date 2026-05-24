@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from "express";
 
 export interface SecurityHeadersOptions {
   /**
-   * Send HSTS. Only enable when you serve HTTPS everywhere — it's sticky in
+   * Send HSTS. Only enable when you serve HTTPS everywhere - it's sticky in
    * browsers. Default false so local/HTTP dev isn't bricked.
    */
   hsts?: boolean;
@@ -29,7 +29,7 @@ const DEFAULT_CSP = [
 
 /**
  * A minimal, framework-agnostic set of hardening headers. Deliberately not
- * "helmet with everything on" — only headers that don't risk breaking a
+ * "helmet with everything on" - only headers that don't risk breaking a
  * normal SPA are on by default. Usability first; opt in to the strict ones.
  */
 export function securityHeaders(opts: SecurityHeadersOptions = {}) {

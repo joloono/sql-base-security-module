@@ -19,7 +19,7 @@ export interface ValidateOptions {
  *
  * Returns a result object instead of throwing so the caller decides the HTTP
  * shape. A `rejected` or `!ok` result is exactly what you feed into
- * abuseGuard.recordInvalid() — invalid input is the signal abuse tracking
+ * abuseGuard.recordInvalid() - invalid input is the signal abuse tracking
  * keys off, never valid submissions.
  */
 export function validateBody<S extends ZodTypeAny>(

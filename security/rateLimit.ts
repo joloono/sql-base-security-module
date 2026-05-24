@@ -6,7 +6,7 @@ export interface RateLimitOptions {
   store: SecurityStore;
   /** Sliding window length in ms. Default 10 minutes. */
   windowMs?: number;
-  /** Max requests per IP per window. Default 10 — generous for honest use. */
+  /** Max requests per IP per window. Default 10 - generous for honest use. */
   max?: number;
   /** Namespace so multiple routes don't share one bucket. Default = method+path. */
   bucket?: string;
@@ -20,7 +20,7 @@ export interface RateLimitOptions {
  * Sliding-window rate limit, per IP, per route.
  *
  * Philosophy: this throttles *volume*, not correctness. Defaults are
- * deliberately loose — a whole family filling in one RSVP form, retrying a
+ * deliberately loose - a whole family filling in one RSVP form, retrying a
  * couple of times, will never hit 10 requests / 10 min. Tighten via options
  * only where a route genuinely needs it.
  */
@@ -49,7 +49,7 @@ export function rateLimit(opts: RateLimitOptions) {
     if (hits > max) {
       res.setHeader("Retry-After", String(Math.ceil(windowMs / 1000)));
       return res.status(429).json({
-        error: opts.message ?? "Zu viele Anfragen. Bitte später erneut versuchen.",
+        error: opts.message ?? "Too many requests. Please try again later.",
       });
     }
     next();

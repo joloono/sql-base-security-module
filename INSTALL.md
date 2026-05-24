@@ -1,29 +1,32 @@
-# INSTALL — Sicherheitsmodul in ein neues Projekt einbauen
+# INSTALL - Integrating the Security Module into a New Project
 
-Schritt-für-Schritt-Anleitung, wie du den `security/`-Ordner in ein beliebiges
-Express + SQL-Projekt droppst.
+Step-by-step guide for copying the `security/` folder into any Express + SQL
+project.
 
-## Voraussetzungen
+## Requirements
 
-Dein Zielprojekt nutzt:
-- **Node.js ≥ 18** (für `crypto.timingSafeEqual`, `randomUUID` etc.)
-- **TypeScript ≥ 5.x** (Modul ist in TS geschrieben)
-- **Express 4 oder 5** (Middleware-Signatur identisch)
-- **SQLite via `better-sqlite3`** (für den Default-Store; sonst eigenen `SecurityStore` implementieren)
-- **Zod ≥ 3.22** (für `validateBody`)
+The target project should use:
 
-## Schritt 1 — Ordner kopieren
+- **Node.js >= 18** for `crypto.timingSafeEqual`, `randomUUID`, and modern
+  runtime features.
+- **TypeScript >= 5.x** because the module is written in TypeScript.
+- **Express 4 or 5**. The middleware signature is compatible with both.
+- **SQLite through `better-sqlite3`** for the default store, or a custom
+  `SecurityStore` implementation.
+- **Zod >= 3.22** for `validateBody`.
+
+## Step 1 - Copy the Folder
 
 ```bash
-cp -r /pfad/zu/Sicherheitsmodul/security  /pfad/zum/Zielprojekt/server/security
+cp -r /path/to/security-module/security /path/to/target-project/server/security
 ```
 
-Genau so: in `server/security/`. Andere Pfade gehen auch — passe dann
-die Imports im Zielprojekt entsprechend an.
+The canonical destination is `server/security/`. Other paths work too, but you
+must then adjust imports in the target project.
 
-## Schritt 2 — Dependencies installieren
+## Step 2 - Install Dependencies
 
-Pflicht:
+Required:
 
 ```bash
 npm install zod
@@ -31,48 +34,48 @@ npm install better-sqlite3
 npm install -D @types/better-sqlite3
 ```
 
-(Express und Express-Types sollten in deinem Projekt schon drin sein.)
+Express and Express types are expected to already exist in the target project.
 
-Wenn du SQLite *nicht* nutzen willst, kannst du `better-sqlite3` weglassen
-und implementierst eigene `SecurityStore`-Klasse — siehe `Security-SQL.md` §3.7.
+If you do not want to use SQLite, omit `better-sqlite3` and implement your own
+`SecurityStore` class. See [Security-SQL.md](Security-SQL.md#37-securitystore---pluggable-counter-persistence).
 
-## Schritt 3 — Environment-Variablen anlegen
+## Step 3 - Add Environment Variables
 
-In `.env`:
+Create or update `.env`:
 
 ```env
-# Geheimes Salt für IP-Hashing (in Production PFLICHT).
-# Generieren mit:
+# Secret salt for IP hashing. Required in production.
+# Generate one with:
 #   node -e "console.log(require('crypto').randomBytes(32).toString('hex'))"
-IP_HASH_PEPPER=ersetze-mit-langem-zufallswert
+IP_HASH_PEPPER=replace-with-a-long-random-value
 
-# Admin-Credentials. Das Modul WEIGERT SICH zu starten, wenn diese in
-# Production leer oder "admin"/"admin" sind.
+# Admin credentials. In production, the module refuses to start when these are
+# empty or set to "admin"/"admin".
 ADMIN_USER=changeme
-ADMIN_PASS=verwende-eine-lange-zufaellige-passphrase
+ADMIN_PASS=use-a-long-random-passphrase
 ```
 
-In `.gitignore`:
+Add local secrets and databases to `.gitignore`:
 
-```
+```gitignore
 .env
 *.db
 *.db-wal
 *.db-shm
 ```
 
-## Schritt 4 — Security-Layer instanziieren
+## Step 4 - Create the Security Layer
 
-Erstelle `server/securityLayer.ts` (projektspezifische Verdrahtung,
-gehört NICHT ins wiederverwendbare Modul):
+Create `server/securityLayer.ts`. This file is project-specific wiring and
+should not be copied back into the reusable module.
 
 ```ts
 import Database from "better-sqlite3";
 import { createSecurityLayer, SqliteSecurityStore } from "./security";
 
-// SQLite-Handle — entweder eigene DB oder die deines Hauptprojekts
+// SQLite handle. Use either a dedicated database or the main app database.
 const sqlite = new Database("data/app.db");
-const store = new SqliteSecurityStore(sqlite); // legt eigene Tabelle an
+const store = new SqliteSecurityStore(sqlite); // creates its own table
 
 export const security = createSecurityLayer({
   store,
@@ -96,9 +99,9 @@ export const security = createSecurityLayer({
 });
 ```
 
-## Schritt 5 — In Express einhängen
+## Step 5 - Mount It in Express
 
-In deinem Express-Setup (`server/index.ts` oder wie es bei dir heißt):
+In the Express setup file, such as `server/index.ts`:
 
 ```ts
 import express from "express";
@@ -106,14 +109,14 @@ import { security } from "./securityLayer";
 
 const app = express();
 
-app.set("trust proxy", 1);            // echte Client-IPs hinter Proxy
-app.use(security.headers);            // app-weite Hardening-Header
-app.use(express.json({ limit: "64kb" }));  // Body-Größenlimit
+app.set("trust proxy", 1);                 // real client IPs behind one proxy
+app.use(security.headers);                 // app-wide hardening headers
+app.use(express.json({ limit: "64kb" }));  // body size limit
 ```
 
-## Schritt 6 — Routen schützen
+## Step 6 - Protect Routes
 
-Write-Route mit voller Behandlung:
+Write route with full handling:
 
 ```ts
 import { validateBody } from "./security";
@@ -127,18 +130,18 @@ app.post(
   async (req, res) => {
     const r = validateBody(req.body, mySchema);
     if (!r.ok) {
-      security.abuseGuard.recordInvalid(req);  // Strike geben
+      security.abuseGuard.recordInvalid(req);  // add a strike
       return res.status(400).json({ error: r.errors });
     }
-    security.abuseGuard.recordValid(req);      // Strikes löschen
+    security.abuseGuard.recordValid(req);      // clear strikes
 
-    // ... r.data verarbeiten ...
+    // ... process r.data ...
     res.json({ ok: true });
   },
 );
 ```
 
-Admin-geschützte Route:
+Admin-protected route:
 
 ```ts
 app.get("/api/admin/stuff", security.requireAdmin!, async (req, res) => {
@@ -146,26 +149,26 @@ app.get("/api/admin/stuff", security.requireAdmin!, async (req, res) => {
 });
 ```
 
-## Schritt 7 — Smoke-Test
+## Step 7 - Smoke Test
 
 ```bash
-# Valider Request — sollte 200 sein
+# Valid request - should return 200
 curl -X POST http://localhost:3000/api/thing \
   -H 'Content-Type: application/json' \
   -d '{"...": "..."}'
 
-# Invalider Request — sollte 400 sein und einen Strike erzeugen
+# Invalid request - should return 400 and create a strike
 curl -X POST http://localhost:3000/api/thing \
   -H 'Content-Type: application/json' \
   -d '{"broken": true}'
 
-# Admin ohne Auth — sollte 401 sein
+# Admin without auth - should return 401
 curl http://localhost:3000/api/admin/stuff
 
-# Admin mit Auth — sollte 200 sein
+# Admin with auth - should return 200
 curl -u $ADMIN_USER:$ADMIN_PASS http://localhost:3000/api/admin/stuff
 
-# 12 schnelle Requests — die letzten sollten 429 sein
+# 12 quick requests - the last ones should return 429
 for i in $(seq 1 12); do
   curl -s -o /dev/null -w '%{http_code}\n' \
     -X POST http://localhost:3000/api/thing \
@@ -174,47 +177,52 @@ for i in $(seq 1 12); do
 done
 ```
 
-## Schritt 8 — In Production gehen
+## Step 8 - Go to Production
 
-Checkliste vor dem Deploy:
+Deployment checklist:
 
-- [ ] `IP_HASH_PEPPER` gesetzt (lang, zufällig, geheim)
-- [ ] `ADMIN_USER` / `ADMIN_PASS` gesetzt (nicht "admin"/"admin")
-- [ ] `NODE_ENV=production` gesetzt (aktiviert die Cred-Verweigerung)
-- [ ] App läuft hinter HTTPS — wenn ja, in `securityLayer.ts` setzen:
-      `headers: { hsts: true }`
-- [ ] `trust proxy` auf die richtige Anzahl Hops gesetzt (1 für einen Proxy)
-- [ ] DB-Datei und `.env` im `.gitignore`
+- [ ] `IP_HASH_PEPPER` is set to a long, random, secret value.
+- [ ] `ADMIN_USER` and `ADMIN_PASS` are set and are not `admin`/`admin`.
+- [ ] `NODE_ENV=production` is set so weak credential checks are active.
+- [ ] The app runs behind HTTPS. If yes, set `headers: { hsts: true }` in
+      `securityLayer.ts`.
+- [ ] `trust proxy` is set to the correct hop count, usually `1` for one proxy.
+- [ ] The database file and `.env` are ignored by git.
 
-## Häufige Stolpersteine
+## Common Issues
 
-**"Cannot find module 'better-sqlite3'"** — Du nutzt SQLite nicht oder
-hast es nicht installiert. Entweder installieren oder eigenen
-`SecurityStore` implementieren.
+**"Cannot find module 'better-sqlite3'"** - SQLite is not installed or the
+target project does not use it. Install `better-sqlite3` or provide a custom
+`SecurityStore`.
 
-**Native-Build-Fehler bei `better-sqlite3` auf Deploy-Server** —
-`better-sqlite3` ist ein Native-Modul. Auf dem Zielsystem muss
-`npm rebuild better-sqlite3` laufen, oder du nutzt prebuilt binaries.
-Für Single-Instance-Deployments (typisch SQLite) ist das in Ordnung.
+**Native build errors for `better-sqlite3` on the deployment server** -
+`better-sqlite3` is a native module. Run `npm rebuild better-sqlite3` on the
+target system or use prebuilt binaries. This is usually acceptable for
+single-instance SQLite deployments.
 
-**Rate-Limit triggert nicht, obwohl die IP gleich ist** — Trust-Proxy
-ist nicht gesetzt; alle Requests kommen vom Proxy mit derselben IP, oder
-`req.ip` zeigt auf den Proxy statt den Client. Lösung: `app.set("trust proxy", 1)`.
+**Rate limiting does not trigger as expected for client IPs** - `trust proxy`
+is probably not configured correctly. All requests may appear to come from the
+proxy, or `req.ip` may point at the proxy instead of the client. Set
+`app.set("trust proxy", 1)` when the app runs behind one trusted proxy.
 
-**Admin-Login crasht den Server beim Start in Production** — Beabsichtigt.
-Setze starke `ADMIN_USER`/`ADMIN_PASS` oder nimm das `enforceStrongInProduction: false`
-in `basicAuth` rein (nicht empfohlen).
+**Admin login crashes the server during production startup** - This is
+intentional. Set strong `ADMIN_USER` and `ADMIN_PASS` values, or pass
+`enforceStrongInProduction: false` to `basicAuth` if you explicitly accept the
+risk.
 
-**CSP blockiert dein Frontend** — Default-CSP ist SPA-tauglich, aber wenn
-du externe Scripts (Analytics, CDN-Fonts etc.) lädst, musst du sie in der
-`csp`-Option explizit erlauben. Beispiel siehe `Security-SQL.md` §3.4.
+**CSP blocks the frontend** - The default CSP works for many single-page app
+setups. If the app loads external scripts, analytics, CDN fonts, or similar
+assets, allow them explicitly through the `csp` option. See
+[Security-SQL.md](Security-SQL.md#34-securityheaders---defense-in-depth-headers).
 
-## Was NICHT in den Modul-Ordner gehört
+## What Does Not Belong in the Module Folder
 
-Das `security/`-Verzeichnis ist absichtlich projekt-unabhängig.
-**Nicht hineinkopieren:**
-- `securityLayer.ts` (projektspezifische Konfiguration — bleibt in `server/`)
-- App-Schemas, Routen, Business-Logik
-- DB-Connection-Code des Hauptprojekts
+The `security/` directory is intentionally project-agnostic.
 
-So bleibt das Modul beim nächsten Projekt 1:1 kopierbar.
+Do not copy these files into it:
+
+- `securityLayer.ts`, because it is project-specific configuration.
+- App schemas, routes, and business logic.
+- Database connection code for the main project.
+
+This keeps the module reusable across projects without modification.

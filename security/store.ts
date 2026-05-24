@@ -1,5 +1,5 @@
 /**
- * SecurityStore — pluggable persistence for rate-limit / abuse-guard counters.
+ * SecurityStore - pluggable persistence for rate-limit / abuse-guard counters.
  *
  * The whole point of this interface is that the security layer never talks to
  * a concrete database. Ship with SQLite today, swap to Postgres/Redis later
@@ -26,7 +26,7 @@ export interface SecurityStore {
 }
 
 /**
- * better-sqlite3 is synchronous, so this store is synchronous too — which
+ * better-sqlite3 is synchronous, so this store is synchronous too - which
  * keeps the middleware free of await and race conditions. It only needs a
  * handle exposing `.prepare()` (a better-sqlite3 Database, or anything
  * API-compatible). No Drizzle dependency on purpose: this module stays
@@ -85,7 +85,7 @@ export class SqliteSecurityStore implements SecurityStore {
 
 /**
  * In-memory fallback. Good for tests or single-process dev without a DB.
- * Not durable and not multi-process safe — do not use behind a load balancer.
+ * Not durable and not multi-process safe - do not use behind a load balancer.
  */
 export class MemorySecurityStore implements SecurityStore {
   private events = new Map<string, number[]>();

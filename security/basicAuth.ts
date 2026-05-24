@@ -7,7 +7,7 @@ export interface BasicAuthOptions {
   realm?: string;
   /**
    * Throw on startup if credentials look weak (empty or "admin"/"admin")
-   * while NODE_ENV=production. Default true — fail loud, not silent.
+   * while NODE_ENV=production. Default true - fail loud, not silent.
    */
   enforceStrongInProduction?: boolean;
 }
@@ -30,7 +30,7 @@ function safeEqual(a: string, b: string): boolean {
  * HTTP Basic auth with constant-time credential comparison.
  *
  * Basic auth is fine for a single-admin internal panel like this. The two
- * historical footguns — timing leaks and shipping default creds — are both
+ * historical footguns - timing leaks and shipping default creds - are both
  * closed here.
  */
 export function basicAuth(opts: BasicAuthOptions) {
